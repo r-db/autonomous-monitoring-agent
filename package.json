@@ -10,7 +10,8 @@
     "test": "node scripts/test-monitors-standalone.js",
     "test:endpoints": "./scripts/test-endpoints.sh",
     "test:frontend": "./scripts/test-frontend-monitors.sh",
-    "test:security": "./scripts/test-security.sh"
+    "test:security": "./scripts/test-security.sh",
+    "postinstall": "npx playwright install --with-deps chromium"
   },
   "keywords": [
     "monitoring",
