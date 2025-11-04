@@ -1,19 +1,9 @@
 const { chromium } = require('playwright');
-const { supabase } = require('../config/database');
+const { query } = require('../config/database');
 const { logAgentAction } = require('../utils/logger');
 const fs = require('fs').promises;
 const path = require('path');
-
-const ADMIN_CONSOLE_URL = process.env.ADMIN_CONSOLE_URL || 'https://admin.ib365.ai';
-
-// Pages to monitor
-const PAGES_TO_MONITOR = [
-  { url: `${ADMIN_CONSOLE_URL}/`, name: 'Dashboard', critical: true },
-  { url: `${ADMIN_CONSOLE_URL}/agents`, name: 'Agents', critical: true },
-  { url: `${ADMIN_CONSOLE_URL}/token-budget`, name: 'Token Budget', critical: false },
-  { url: `${ADMIN_CONSOLE_URL}/tenants`, name: 'Tenants', critical: true },
-  { url: `${ADMIN_CONSOLE_URL}/settings`, name: 'Settings', critical: false }
-];
+const { PAGES_TO_MONITOR } = require('./pages-config');
 
 /**
  * Monitor browser console for errors using Playwright
@@ -131,20 +121,24 @@ async function checkPage(browser, pageConfig) {
     const responseTime = Date.now() - startTime;
 
     // Log check to database
-    const { error: checkError } = await supabase.from('monitoring_checks').insert({
-      check_id: checkId,
-      check_type: 'browser',
-      target: pageConfig.url,
-      application: 'admin-console-frontend',
-      status: errors.length > 0 ? 'error' : (warnings.length > 0 ? 'warning' : 'healthy'),
-      response_time_ms: responseTime,
-      errors_detected: errors.length,
-      error_details: {
-        page_name: pageConfig.name,
-        errors: errors.map(e => e.message),
-        warnings: warnings.map(w => w.message)
-      }
-    });
+    const { error: checkError } = await query(
+      `INSERT INTO monitoring_checks (check_id, check_type, target, application, status, response_time_ms, errors_detected, error_details)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        checkId,
+        'browser',
+        pageConfig.url,
+        'admin-console-frontend',
+        errors.length > 0 ? 'error' : (warnings.length > 0 ? 'warning' : 'healthy'),
+        responseTime,
+        errors.length,
+        JSON.stringify({
+          page_name: pageConfig.name,
+          errors: errors.map(e => e.message),
+          warnings: warnings.map(w => w.message)
+        })
+      ]
+    );
 
     if (checkError) {
       console.error(`[PLAYWRIGHT] Failed to log check: ${checkError.message}`);
@@ -161,36 +155,44 @@ async function checkPage(browser, pageConfig) {
     console.error(`[PLAYWRIGHT ERROR] ${pageConfig.name}:`, error.message);
 
     // Log check failure
-    await supabase.from('monitoring_checks').insert({
-      check_id: checkId,
-      check_type: 'browser',
-      target: pageConfig.url,
-      application: 'admin-console-frontend',
-      status: 'error',
-      errors_detected: 1,
-      error_details: {
-        page_name: pageConfig.name,
-        error: error.message,
-        monitoring_failure: true
-      }
-    });
+    await query(
+      `INSERT INTO monitoring_checks (check_id, check_type, target, application, status, errors_detected, error_details)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        checkId,
+        'browser',
+        pageConfig.url,
+        'admin-console-frontend',
+        'error',
+        1,
+        JSON.stringify({
+          page_name: pageConfig.name,
+          error: error.message,
+          monitoring_failure: true
+        })
+      ]
+    );
 
     // Create incident for monitoring failure
-    await supabase.from('incidents').insert({
-      incident_id: `INC-BROWSER-${Date.now()}`,
-      title: `Browser monitoring failed: ${pageConfig.name}`,
-      error_message: `Failed to monitor ${pageConfig.name}: ${error.message}`,
-      error_type: 'monitoring_failure',
-      severity: 'HIGH',
-      category: 'infrastructure',
-      application: 'autonomous-monitoring-agent',
-      status: 'detected',
-      context: {
-        page_name: pageConfig.name,
-        page_url: pageConfig.url,
-        error: error.message
-      }
-    });
+    await query(
+      `INSERT INTO incidents (incident_id, title, error_message, error_type, severity, category, application, status, context)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        `INC-BROWSER-${Date.now()}`,
+        `Browser monitoring failed: ${pageConfig.name}`,
+        `Failed to monitor ${pageConfig.name}: ${error.message}`,
+        'monitoring_failure',
+        'HIGH',
+        'infrastructure',
+        'autonomous-monitoring-agent',
+        'detected',
+        JSON.stringify({
+          page_name: pageConfig.name,
+          page_url: pageConfig.url,
+          error: error.message
+        })
+      ]
+    );
 
   } finally {
     // Clean up
@@ -220,34 +222,36 @@ async function handleBrowserErrors(page, checkId, pageConfig, errors, warnings) 
     const severity = pageConfig.critical ? 'HIGH' : 'MEDIUM';
 
     // Create incident
-    const { data: incident, error: incidentError } = await supabase
-      .from('incidents')
-      .insert({
-        incident_id: `INC-BROWSER-${Date.now()}`,
-        title: `Browser error on ${pageConfig.name}`,
-        error_message: errors[0].message,
-        error_type: 'browser_console_error',
-        severity: severity,
-        category: 'frontend',
-        application: 'admin-console-frontend',
-        status: 'detected',
-        stack_trace: errors[0].stack || null,
-        context: {
+    const { rows, error: incidentError } = await query(
+      `INSERT INTO incidents (incident_id, title, error_message, error_type, severity, category, application, status, stack_trace, context)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [
+        `INC-BROWSER-${Date.now()}`,
+        `Browser error on ${pageConfig.name}`,
+        errors[0].message,
+        'browser_console_error',
+        severity,
+        'frontend',
+        'admin-console-frontend',
+        'detected',
+        errors[0].stack || null,
+        JSON.stringify({
           page_name: pageConfig.name,
           page_url: pageConfig.url,
           errors: errors,
           warnings: warnings,
           screenshot_path: screenshotPath,
           check_id: checkId
-        }
-      })
-      .select()
-      .single();
+        })
+      ]
+    );
 
     if (incidentError) {
       console.error(`[PLAYWRIGHT] Failed to create incident: ${incidentError.message}`);
       return;
     }
+
+    const incident = rows[0];
 
     console.error(`[PLAYWRIGHT ERROR] ${pageConfig.name} - ${errors.length} errors detected`);
     console.error(`  First error: ${errors[0].message}`);

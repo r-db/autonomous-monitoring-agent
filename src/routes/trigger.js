@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { supabase } = require('../config/database');
+const { query } = require('../config/database');
 const { monitorBrowserErrors } = require('../monitors/playwright-monitor');
 const { runHealthChecks } = require('../monitors/health-check');
 const { runSecurityChecks } = require('../monitors/security-scanner');
@@ -180,25 +180,26 @@ router.post('/api/autonomous/trigger-test-error', async (req, res) => {
 
     const incidentId = `INC-TEST-${Date.now()}`;
 
-    const { data: incident, error: dbError } = await supabase
-      .from('incidents')
-      .insert({
-        incident_id: incidentId,
-        title: `Test error: ${error_type || 'manual'}`,
-        error_message: message || 'Manual test error for monitoring system',
-        error_type: error_type || 'test_error',
-        severity: severity || 'MEDIUM',
-        category: 'test',
-        application: 'autonomous-monitoring-agent',
-        status: 'detected',
-        context: {
+    const { rows, error: dbError } = await query(
+      `INSERT INTO incidents (incident_id, title, error_message, error_type, severity, category, application, status, context)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [
+        incidentId,
+        `Test error: ${error_type || 'manual'}`,
+        message || 'Manual test error for monitoring system',
+        error_type || 'test_error',
+        severity || 'MEDIUM',
+        'test',
+        'autonomous-monitoring-agent',
+        'detected',
+        JSON.stringify({
           test: true,
           triggered_manually: true,
           timestamp: new Date().toISOString()
-        }
-      })
-      .select()
-      .single();
+        })
+      ]
+    );
+    const incident = rows[0];
 
     if (dbError) {
       return res.status(500).json({
@@ -241,24 +242,20 @@ router.post('/api/autonomous/trigger-test-error', async (req, res) => {
  */
 router.get('/api/autonomous/status', async (req, res) => {
   try {
+    const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
+
     // Get recent monitoring activity
-    const { data: recentChecks } = await supabase
-      .from('monitoring_checks')
-      .select('*')
-      .gte('timestamp', new Date(Date.now() - 3600000).toISOString())
-      .order('timestamp', { ascending: false })
-      .limit(100);
+    const { rows: recentChecks } = await query(
+      'SELECT * FROM monitoring_checks WHERE timestamp >= $1 ORDER BY timestamp DESC LIMIT 100',
+      [oneHourAgo]
+    );
 
-    const { data: recentIncidents } = await supabase
-      .from('incidents')
-      .select('*')
-      .gte('detected_at', new Date(Date.now() - 3600000).toISOString())
-      .order('detected_at', { ascending: false })
-      .limit(20);
+    const { rows: recentIncidents } = await query(
+      'SELECT * FROM incidents WHERE detected_at >= $1 ORDER BY detected_at DESC LIMIT 20',
+      [oneHourAgo]
+    );
 
-    const { data: config } = await supabase
-      .from('system_config')
-      .select('*');
+    const { rows: config } = await query('SELECT * FROM system_config', []);
 
     const configMap = {};
     config?.forEach(item => {

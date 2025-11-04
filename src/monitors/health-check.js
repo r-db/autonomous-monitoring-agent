@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { supabase } = require('../config/database');
+const { query } = require('../config/database');
 const { logAgentAction } = require('../utils/logger');
 
 // Health check configuration
@@ -50,39 +50,35 @@ async function runHealthChecks() {
       const isHealthy = response.status === check.expected_status;
 
       // Log check to database
-      await supabase.from('monitoring_checks').insert({
-        check_id: checkId,
-        check_type: 'health',
-        target: check.url,
-        application: check.application,
-        status: isHealthy ? 'healthy' : 'error',
-        http_status: response.status,
-        response_time_ms: responseTime,
-        errors_detected: isHealthy ? 0 : 1
-      });
+      await query(
+        `INSERT INTO monitoring_checks (check_id, check_type, target, application, status, http_status, response_time_ms, errors_detected)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [checkId, 'health', check.url, check.application, isHealthy ? 'healthy' : 'error', response.status, responseTime, isHealthy ? 0 : 1]
+      );
 
       if (!isHealthy) {
         // Create incident for failed health check
-        const { data: incident } = await supabase
-          .from('incidents')
-          .insert({
-            incident_id: `INC-HEALTH-${Date.now()}`,
-            title: `Health check failed: ${check.name}`,
-            error_message: `${check.name} health check failed. Status: ${response.status}, Expected: ${check.expected_status}`,
-            error_type: 'health_check_failure',
-            severity: 'CRITICAL',
-            category: 'infrastructure',
-            application: check.application,
-            status: 'detected',
-            context: {
+        const { rows } = await query(
+          `INSERT INTO incidents (incident_id, title, error_message, error_type, severity, category, application, status, context)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+          [
+            `INC-HEALTH-${Date.now()}`,
+            `Health check failed: ${check.name}`,
+            `${check.name} health check failed. Status: ${response.status}, Expected: ${check.expected_status}`,
+            'health_check_failure',
+            'CRITICAL',
+            'infrastructure',
+            check.application,
+            'detected',
+            JSON.stringify({
               check_name: check.name,
               url: check.url,
               http_status: response.status,
               response_time_ms: responseTime
-            }
-          })
-          .select()
-          .single();
+            })
+          ]
+        );
+        const incident = rows[0];
 
         console.error(`[HEALTH CHECK FAILED] ${check.name} - Status: ${response.status}`);
 
@@ -108,41 +104,46 @@ async function runHealthChecks() {
       const responseTime = Date.now() - startTime;
 
       // Log failed check
-      await supabase.from('monitoring_checks').insert({
-        check_id: checkId,
-        check_type: 'health',
-        target: check.url,
-        application: check.application,
-        status: 'error',
-        response_time_ms: responseTime,
-        errors_detected: 1,
-        error_details: {
-          error: error.message,
-          code: error.code
-        }
-      });
+      await query(
+        `INSERT INTO monitoring_checks (check_id, check_type, target, application, status, response_time_ms, errors_detected, error_details)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          checkId,
+          'health',
+          check.url,
+          check.application,
+          'error',
+          responseTime,
+          1,
+          JSON.stringify({
+            error: error.message,
+            code: error.code
+          })
+        ]
+      );
 
       // Create incident for exception
-      const { data: incident } = await supabase
-        .from('incidents')
-        .insert({
-          incident_id: `INC-HEALTH-${Date.now()}`,
-          title: `Health check failed: ${check.name}`,
-          error_message: `${check.name} health check failed with error: ${error.message}`,
-          error_type: 'health_check_failure',
-          severity: 'CRITICAL',
-          category: 'infrastructure',
-          application: check.application,
-          status: 'detected',
-          context: {
+      const { rows } = await query(
+        `INSERT INTO incidents (incident_id, title, error_message, error_type, severity, category, application, status, context)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [
+          `INC-HEALTH-${Date.now()}`,
+          `Health check failed: ${check.name}`,
+          `${check.name} health check failed with error: ${error.message}`,
+          'health_check_failure',
+          'CRITICAL',
+          'infrastructure',
+          check.application,
+          'detected',
+          JSON.stringify({
             check_name: check.name,
             url: check.url,
             error: error.message,
             error_code: error.code
-          }
-        })
-        .select()
-        .single();
+          })
+        ]
+      );
+      const incident = rows[0];
 
       console.error(`[HEALTH CHECK ERROR] ${check.name} - ${error.message}`);
 

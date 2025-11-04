@@ -1,4 +1,4 @@
-const { supabase } = require('../config/database');
+const { query } = require('../config/database');
 const { logAgentAction } = require('../utils/logger');
 
 // Security monitoring rules
@@ -77,11 +77,10 @@ async function checkRateLimitAnomalies() {
     // Check monitoring_checks frequency in last minute
     const oneMinuteAgo = new Date(Date.now() - 60000).toISOString();
 
-    const { data: checks, error } = await supabase
-      .from('monitoring_checks')
-      .select('*')
-      .gte('timestamp', oneMinuteAgo)
-      .order('timestamp', { ascending: false });
+    const { rows: checks, error } = await query(
+      `SELECT * FROM monitoring_checks WHERE timestamp >= $1 ORDER BY timestamp DESC`,
+      [oneMinuteAgo]
+    );
 
     if (error) {
       console.error('[SECURITY] Rate limit check error:', error.message);
@@ -92,18 +91,22 @@ async function checkRateLimitAnomalies() {
       const eventId = `SEC-RATE-${Date.now()}`;
 
       // Create security event
-      await supabase.from('security_events').insert({
-        event_id: eventId,
-        event_type: 'rate_limit_anomaly',
-        severity: 'MEDIUM',
-        status: 'detected',
-        description: `Unusually high request rate detected: ${checks.length} requests in 1 minute`,
-        confidence_score: 0.8,
-        metadata: {
-          requests_per_minute: checks.length,
-          threshold: SECURITY_RULES.rate_limit_threshold
-        }
-      });
+      await query(
+        `INSERT INTO security_events (event_id, event_type, severity, status, description, confidence_score, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          eventId,
+          'rate_limit_anomaly',
+          'MEDIUM',
+          'detected',
+          `Unusually high request rate detected: ${checks.length} requests in 1 minute`,
+          0.8,
+          JSON.stringify({
+            requests_per_minute: checks.length,
+            threshold: SECURITY_RULES.rate_limit_threshold
+          })
+        ]
+      );
 
       console.warn(`[SECURITY] Rate limit anomaly: ${checks.length} req/min (threshold: ${SECURITY_RULES.rate_limit_threshold})`);
 
@@ -141,11 +144,10 @@ async function checkUnusualAccessPatterns() {
       // Check for activity in last 5 minutes
       const fiveMinutesAgo = new Date(Date.now() - 300000).toISOString();
 
-      const { data: recentChecks, error } = await supabase
-        .from('monitoring_checks')
-        .select('*')
-        .gte('timestamp', fiveMinutesAgo)
-        .order('timestamp', { ascending: false });
+      const { rows: recentChecks, error } = await query(
+        `SELECT * FROM monitoring_checks WHERE timestamp >= $1 ORDER BY timestamp DESC`,
+        [fiveMinutesAgo]
+      );
 
       if (error) {
         console.error('[SECURITY] Access pattern check error:', error.message);
@@ -156,19 +158,23 @@ async function checkUnusualAccessPatterns() {
       if (recentChecks && recentChecks.length > 10) {
         const eventId = `SEC-ACCESS-${Date.now()}`;
 
-        await supabase.from('security_events').insert({
-          event_id: eventId,
-          event_type: 'unusual_access_pattern',
-          severity: 'MEDIUM',
-          status: 'detected',
-          description: `Unusual access detected at ${currentHour}:00 (outside normal hours 6am-12am)`,
-          confidence_score: 0.7,
-          metadata: {
-            hour: currentHour,
-            requests: recentChecks.length,
-            window: '5 minutes'
-          }
-        });
+        await query(
+          `INSERT INTO security_events (event_id, event_type, severity, status, description, confidence_score, metadata)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            eventId,
+            'unusual_access_pattern',
+            'MEDIUM',
+            'detected',
+            `Unusual access detected at ${currentHour}:00 (outside normal hours 6am-12am)`,
+            0.7,
+            JSON.stringify({
+              hour: currentHour,
+              requests: recentChecks.length,
+              window: '5 minutes'
+            })
+          ]
+        );
 
         console.warn(`[SECURITY] Unusual access at ${currentHour}:00 - ${recentChecks.length} requests`);
 
@@ -201,12 +207,10 @@ async function checkFailedLoginAttempts() {
     // Check for auth-related errors in incidents (last hour)
     const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
 
-    const { data: authErrors, error } = await supabase
-      .from('incidents')
-      .select('*')
-      .eq('category', 'security')
-      .gte('detected_at', oneHourAgo)
-      .order('detected_at', { ascending: false });
+    const { rows: authErrors, error } = await query(
+      `SELECT * FROM incidents WHERE category = $1 AND detected_at >= $2 ORDER BY detected_at DESC`,
+      ['security', oneHourAgo]
+    );
 
     if (error) {
       console.error('[SECURITY] Failed login check error:', error.message);
@@ -217,41 +221,46 @@ async function checkFailedLoginAttempts() {
       const eventId = `SEC-AUTH-${Date.now()}`;
 
       // Create incident
-      const { data: incident } = await supabase
-        .from('incidents')
-        .insert({
-          incident_id: `INC-SEC-${Date.now()}`,
-          title: 'Multiple authentication failures detected',
-          error_message: `${authErrors.length} authentication errors in the last hour`,
-          error_type: 'security_alert',
-          severity: 'HIGH',
-          category: 'security',
-          application: 'admin-console-backend',
-          status: 'detected',
-          context: {
+      const { rows: incidentRows } = await query(
+        `INSERT INTO incidents (incident_id, title, error_message, error_type, severity, category, application, status, context)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [
+          `INC-SEC-${Date.now()}`,
+          'Multiple authentication failures detected',
+          `${authErrors.length} authentication errors in the last hour`,
+          'security_alert',
+          'HIGH',
+          'security',
+          'admin-console-backend',
+          'detected',
+          JSON.stringify({
             failed_attempts: authErrors.length,
             threshold: SECURITY_RULES.failed_login_threshold,
             timeframe: '1 hour',
             incidents: authErrors.map(e => e.incident_id)
-          }
-        })
-        .select()
-        .single();
+          })
+        ]
+      );
+      const incident = incidentRows[0];
 
       // Create security event
-      await supabase.from('security_events').insert({
-        event_id: eventId,
-        event_type: 'failed_login_attempts',
-        severity: 'HIGH',
-        status: 'detected',
-        description: `${authErrors.length} failed authentication attempts in 1 hour`,
-        confidence_score: 0.9,
-        incident_created: incident?.id,
-        metadata: {
-          attempts: authErrors.length,
-          threshold: SECURITY_RULES.failed_login_threshold
-        }
-      });
+      await query(
+        `INSERT INTO security_events (event_id, event_type, severity, status, description, confidence_score, incident_created, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          eventId,
+          'failed_login_attempts',
+          'HIGH',
+          'detected',
+          `${authErrors.length} failed authentication attempts in 1 hour`,
+          0.9,
+          incident?.id,
+          JSON.stringify({
+            attempts: authErrors.length,
+            threshold: SECURITY_RULES.failed_login_threshold
+          })
+        ]
+      );
 
       // Log action
       await logAgentAction({
@@ -296,11 +305,10 @@ async function checkRapidAPICalls() {
     // Check for > 100 requests in last 5 minutes
     const fiveMinutesAgo = new Date(Date.now() - 300000).toISOString();
 
-    const { data: checks, error } = await supabase
-      .from('monitoring_checks')
-      .select('*')
-      .gte('timestamp', fiveMinutesAgo)
-      .order('timestamp', { ascending: false });
+    const { rows: checks, error } = await query(
+      `SELECT * FROM monitoring_checks WHERE timestamp >= $1 ORDER BY timestamp DESC`,
+      [fiveMinutesAgo]
+    );
 
     if (error) {
       console.error('[SECURITY] Rapid API check error:', error.message);
@@ -311,19 +319,23 @@ async function checkRapidAPICalls() {
       const eventId = `SEC-DDOS-${Date.now()}`;
 
       // Create security event
-      await supabase.from('security_events').insert({
-        event_id: eventId,
-        event_type: 'rapid_api_calls',
-        severity: 'CRITICAL',
-        status: 'detected',
-        description: `Potential DDoS attack: ${checks.length} API calls in 5 minutes`,
-        confidence_score: 0.85,
-        metadata: {
-          calls: checks.length,
-          threshold: SECURITY_RULES.rapid_api_threshold,
-          timeframe: '5 minutes'
-        }
-      });
+      await query(
+        `INSERT INTO security_events (event_id, event_type, severity, status, description, confidence_score, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          eventId,
+          'rapid_api_calls',
+          'CRITICAL',
+          'detected',
+          `Potential DDoS attack: ${checks.length} API calls in 5 minutes`,
+          0.85,
+          JSON.stringify({
+            calls: checks.length,
+            threshold: SECURITY_RULES.rapid_api_threshold,
+            timeframe: '5 minutes'
+          })
+        ]
+      );
 
       console.warn(`[SECURITY] Rapid API calls: ${checks.length} in 5 min (threshold: ${SECURITY_RULES.rapid_api_threshold})`);
 

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { supabase } = require('../config/database');
+const { query } = require('../config/database');
 const { classifyError, generateIncidentId, sanitizeErrorMessage } = require('../services/error-classifier');
 const { logAgentAction } = require('../utils/logger');
 const { validateErrorCreation, validateIncidentId } = require('../middleware/validation');
@@ -34,23 +34,24 @@ router.post('/api/autonomous/error', errorCreationLimiter, async (req, res) => {
     const sanitizedMessage = sanitizeErrorMessage(error.message);
 
     // Create incident
-    const { data: incident, error: dbError } = await supabase
-      .from('incidents')
-      .insert({
-        incident_id: incidentId,
-        title: sanitizedMessage.substring(0, 255),
-        error_message: sanitizedMessage,
-        error_type: error.type || 'unknown',
-        severity: finalSeverity,
-        category: finalCategory,
-        application: context?.application || 'unknown',
-        status: 'detected',
-        stack_trace: error.stack || null,
-        endpoint: context?.endpoint || null,
-        context: context || {}
-      })
-      .select()
-      .single();
+    const { rows, error: dbError } = await query(
+      `INSERT INTO incidents (incident_id, title, error_message, error_type, severity, category, application, status, stack_trace, endpoint, context)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      [
+        incidentId,
+        sanitizedMessage.substring(0, 255),
+        sanitizedMessage,
+        error.type || 'unknown',
+        finalSeverity,
+        finalCategory,
+        context?.application || 'unknown',
+        'detected',
+        error.stack || null,
+        context?.endpoint || null,
+        JSON.stringify(context || {})
+      ]
+    );
+    const incident = rows[0];
 
     if (dbError) {
       console.error('[ERROR REPORTING] Database error:', dbError.message);
@@ -105,17 +106,20 @@ router.get('/api/autonomous/incidents', async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const status = req.query.status;
 
-    let query = supabase
-      .from('incidents')
-      .select('*')
-      .order('detected_at', { ascending: false })
-      .limit(limit);
+    let sqlQuery = 'SELECT * FROM incidents';
+    let params = [];
 
     if (status) {
-      query = query.eq('status', status);
+      sqlQuery += ' WHERE status = $1';
+      params.push(status);
+      sqlQuery += ' ORDER BY detected_at DESC LIMIT $2';
+      params.push(limit);
+    } else {
+      sqlQuery += ' ORDER BY detected_at DESC LIMIT $1';
+      params.push(limit);
     }
 
-    const { data: incidents, error } = await query;
+    const { rows: incidents, error } = await query(sqlQuery, params);
 
     if (error) {
       return res.status(500).json({
@@ -147,11 +151,11 @@ router.get('/api/autonomous/incidents/:id', async (req, res) => {
   try {
     const incidentId = req.params.id;
 
-    const { data: incident, error } = await supabase
-      .from('incidents')
-      .select('*')
-      .eq('incident_id', incidentId)
-      .single();
+    const { rows, error } = await query(
+      'SELECT * FROM incidents WHERE incident_id = $1',
+      [incidentId]
+    );
+    const incident = rows[0];
 
     if (error || !incident) {
       return res.status(404).json({
