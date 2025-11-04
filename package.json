@@ -1,0 +1,40 @@
+{
+  "name": "autonomous-monitoring-agent",
+  "version": "1.0.0",
+  "description": "Autonomous Monitoring & Security Agent - Backend Foundation",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "test": "node scripts/test-monitors-standalone.js",
+    "test:endpoints": "./scripts/test-endpoints.sh",
+    "test:frontend": "./scripts/test-frontend-monitors.sh",
+    "test:security": "./scripts/test-security.sh"
+  },
+  "keywords": [
+    "monitoring",
+    "autonomous",
+    "agent",
+    "security"
+  ],
+  "author": "InboundAI365",
+  "license": "ISC",
+  "dependencies": {
+    "@playwright/test": "^1.56.1",
+    "@supabase/supabase-js": "^2.38.4",
+    "axios": "^1.6.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.2.1",
+    "express-validator": "^7.3.0",
+    "helmet": "^8.1.0",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.56.1",
+    "winston": "^3.11.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
