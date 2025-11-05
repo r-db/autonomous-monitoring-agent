@@ -146,7 +146,17 @@ async function checkPage(browser, pageConfig) {
 
     // Create incident if errors found
     if (errors.length > 0) {
-      await handleBrowserErrors(page, checkId, pageConfig, errors, warnings);
+      const incidentId = await handleBrowserErrors(page, checkId, pageConfig, errors, warnings);
+
+      // Trigger auto-fix if enabled
+      if (incidentId) {
+        try {
+          const autoFixEngine = require('../services/auto-fix-engine');
+          await autoFixEngine.processIncident(incidentId);
+        } catch (error) {
+          console.error('[PLAYWRIGHT] Auto-fix failed:', error.message);
+        }
+      }
     } else {
       console.log(`[PLAYWRIGHT OK] ${pageConfig.name} - No errors detected`);
     }
@@ -256,6 +266,8 @@ async function handleBrowserErrors(page, checkId, pageConfig, errors, warnings) 
     console.error(`[PLAYWRIGHT ERROR] ${pageConfig.name} - ${errors.length} errors detected`);
     console.error(`  First error: ${errors[0].message}`);
     console.error(`  Incident: ${incident.incident_id}`);
+
+    return incident.incident_id;
 
     // Log action
     await logAgentAction({

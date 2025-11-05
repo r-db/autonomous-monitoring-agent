@@ -8,6 +8,7 @@ const { logAgentAction } = require('./utils/logger');
 const { validateEnv } = require('./utils/env-validator');
 const { authenticateAPIKey } = require('./middleware/auth');
 const { apiLimiter } = require('./middleware/rate-limit');
+const websocketServer = require('./services/websocket-server');
 
 // Load environment variables
 dotenv.config();
@@ -64,6 +65,7 @@ app.use((req, res, next) => {
 const healthRoutes = require('./routes/health');
 const errorReportingRoutes = require('./routes/error-reporting');
 const triggerRoutes = require('./routes/trigger');
+const llmConfigRoutes = require('./routes/llm-config');
 
 // Health routes (no auth required)
 app.use(healthRoutes);
@@ -75,6 +77,7 @@ app.use('/api/autonomous', apiLimiter);
 // API routes (protected by auth and rate limiting)
 app.use(errorReportingRoutes);
 app.use(triggerRoutes);
+app.use('/api/llm', llmConfigRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -93,7 +96,22 @@ app.get('/', (req, res) => {
       trigger_security: '/api/autonomous/trigger/security',
       trigger_health: '/api/autonomous/trigger/health',
       trigger_test_error: '/api/autonomous/trigger-test-error',
-      system_status: '/api/autonomous/status'
+      system_status: '/api/autonomous/status',
+      llm_config: '/api/llm/config',
+      llm_provider: '/api/llm/provider',
+      llm_model: '/api/llm/model',
+      llm_auto_fix_toggle: '/api/llm/auto-fix/toggle',
+      llm_usage: '/api/llm/usage',
+      llm_test: '/api/llm/test'
+    },
+    features: {
+      autonomous_monitoring: true,
+      browser_console_monitoring: true,
+      security_scanning: true,
+      llm_integration: true,
+      auto_fix_engine: true,
+      knowledge_base: true,
+      real_time_websocket: true
     }
   });
 });
@@ -170,6 +188,10 @@ const server = app.listen(PORT, async () => {
     console.error('[STARTUP] WARNING: Database connection failed');
     console.error('[STARTUP] Service will continue but monitoring may not work');
   }
+
+  // Initialize WebSocket server
+  console.log('[STARTUP] Initializing WebSocket server...');
+  websocketServer.initialize(server);
 
   // Start monitoring
   console.log('[STARTUP] Starting monitoring services...');

@@ -22,6 +22,8 @@
   "author": "InboundAI365",
   "license": "ISC",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@mozilla/readability": "^0.5.0",
     "@playwright/test": "^1.56.1",
     "axios": "^1.6.2",
     "cors": "^2.8.5",
@@ -30,9 +32,12 @@
     "express-rate-limit": "^8.2.1",
     "express-validator": "^7.3.0",
     "helmet": "^8.1.0",
+    "jsdom": "^25.0.0",
     "node-cron": "^3.0.3",
+    "openai": "^4.73.0",
     "pg": "^8.16.3",
     "playwright": "^1.56.1",
+    "socket.io": "^4.8.1",
     "winston": "^3.11.0"
   },
   "engines": {
