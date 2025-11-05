@@ -1,7 +1,6 @@
 const validateEnv = () => {
   const required = [
-    'SUPABASE_URL',
-    'SUPABASE_ANON_KEY',
+    'DATABASE_URL',
     'API_KEY'
   ];
 
@@ -13,11 +12,9 @@ const validateEnv = () => {
     process.exit(1);
   }
 
-  // Validate URL format
-  try {
-    new URL(process.env.SUPABASE_URL);
-  } catch (e) {
-    console.error('[ENV ERROR] SUPABASE_URL is not a valid URL');
+  // Validate DATABASE_URL is a valid PostgreSQL connection string
+  if (!process.env.DATABASE_URL.startsWith('postgresql://') && !process.env.DATABASE_URL.startsWith('postgres://')) {
+    console.error('[ENV ERROR] DATABASE_URL must be a valid PostgreSQL connection string');
     process.exit(1);
   }
 
